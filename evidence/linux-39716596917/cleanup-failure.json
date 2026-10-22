@@ -1,0 +1,14 @@
+{
+  "run_id": "39716596917",
+  "source_commit": "7c5ef0d510bb4f4c12a8999429c49081ba353805",
+  "scenario": "intentional failure after launching the first owned Chirp server",
+  "expected_process_exit": 1,
+  "passed": false,
+  "behavior_passed": false,
+  "cleanup": true,
+  "scratch_removed": true,
+  "reaped_owned_processes": true,
+  "owned_processes": ["configure", "make-runtime", "native-lifecycle", "native-alternate-read", "chirp-A-1"],
+  "all_owned_processes_stopped": true,
+  "all_owned_process_groups_absent": true
+}

@@ -1,0 +1,5 @@
+{
+  "disabled": true,
+  "checked_debug_logs": ["chirp-A-1.debug.log", "chirp-B-1.debug.log", "chirp-B-2.debug.log"],
+  "catalog_update_activity_found": false
+}

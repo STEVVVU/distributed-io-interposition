@@ -1,0 +1,9 @@
+{
+  "source_commit": "7c5ef0d510bb4f4c12a8999429c49081ba353805",
+  "plans": {
+    "plan-first.json": {"successful_lineages": [["A"]], "minimal_cuts": [["A"]]},
+    "plan-learned.json": {"successful_lineages": [["A"], ["B"]], "minimal_cuts": [["A", "B"]]},
+    "plan-final.json": {"successful_lineages": [["A"], ["B"]], "minimal_cuts": [["A", "B"]]},
+    "plan-after-wrong-bytes.json": {"successful_lineages": [["A"], ["B"]], "minimal_cuts": [["A", "B"]]}
+  }
+}

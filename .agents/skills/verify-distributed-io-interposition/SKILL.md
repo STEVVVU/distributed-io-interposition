@@ -3,9 +3,9 @@ name: verify-distributed-io-interposition
 description: Build and drive the real Linux Parrot and Chirp runtime against owned loopback storage to verify transparent file I/O and lineage-driven endpoint failure exploration.
 ---
 
-# Draft status
+## Verified status and scope
 
-This driver is unproven on Linux. The current development host is Windows without WSL or a Linux container, and Parrot requires native Linux `ptrace`. Do not represent the native runtime journey as verified until a non-root Ubuntu 24.04 run finishes Launch, Doctor, Drive, Evidence, and Cleanup.
+The mapped native journeys and injected cleanup-failure path passed on non-root Ubuntu 24.04 at commit `7c5ef0d510bb4f4c12a8999429c49081ba353805` (hosted run [39716596917](https://github.com/STEVVVU/distributed-io-interposition/actions/runs/39716596917)); compact retained evidence is in [`evidence/linux-39716596917`](../../../evidence/linux-39716596917/). This is a point-in-time proof of the mapped paths on that runner. It does not certify other Linux versions, arbitrary workloads, general fault tolerance, or arbitrary network-call interposition. Re-drive the affected paths after changes to mapped behavior or the driver.
 
 ## Launch
 

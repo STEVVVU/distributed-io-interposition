@@ -1,0 +1,15 @@
+{
+  "run_id": "39716596917",
+  "source_commit": "7c5ef0d510bb4f4c12a8999429c49081ba353805",
+  "platform": "Ubuntu 24.04 / Linux x86_64 / non-root / Python 3.12.3",
+  "passed": true,
+  "behavior_passed": true,
+  "cleanup": true,
+  "scratch_removed": true,
+  "reaped_owned_processes": true,
+  "chirp_server_executable": true,
+  "parrot_run_executable": true,
+  "catalog_registration_disabled": true,
+  "catalog_logs_checked": ["chirp-A-1.debug.log", "chirp-B-1.debug.log", "chirp-B-2.debug.log"],
+  "receiver_payload": {"bytes": 30, "sha256": "0c54d8c26ac574d7162b5d2cb45b41ba8469dfe419939d0d52ca53f4f7a41c55"}
+}
