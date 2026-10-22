@@ -1,0 +1,87 @@
+name: Verify distributed I/O interposition
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # actions/checkout v5 resolved to this official commit on 2026-10-21.
+      # Source: https://github.com/actions/checkout/commit/fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check native environment
+        run: python3 coursework/verify.py --doctor
+      - name: Test bounded lineage and I/O behavior
+        run: python3 -m unittest discover -s coursework -p 'test_*.py' -v
+      - name: Build and drive real Parrot and Chirp
+        env:
+          RUN_NAME: ci-${{ github.run_id }}-${{ github.run_attempt }}
+        run: python3 coursework/verify.py --run "$RUN_NAME"
+      - name: Verify owned-process cleanup after injected failure
+        env:
+          RUN_NAME: cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set +e
+          python3 coursework/verify.py --run "$RUN_NAME" --fail-after-launch
+          status=$?
+          set -e
+          if [ "$status" -ne 1 ]; then
+            echo "Expected the injected driver failure to exit 1, got $status" >&2
+            exit 1
+          fi
+          python3 - "$RUN_NAME" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          run = sys.argv[1]
+          evidence = pathlib.Path(".local/evidence") / run
+          result = json.loads((evidence / "result.json").read_text(encoding="utf-8"))
+          assert result["failure_injection"] == "after-first-owned-server-launch", result
+          assert result["passed"] is False, result
+          assert result["behavior_passed"] is False, result
+          assert result["cleanup"] is True, result
+          assert result["scratch_removed"] is True, result
+          assert result["reaped_owned_processes"] is True, result
+          assert result["owned_processes"], result
+          assert all(process["status"] == "stopped" for process in result["owned_processes"]), result
+          stopped = {process["pid"]: process for process in result["stopped_processes"]}
+          assert {process["pid"] for process in result["owned_processes"]} <= set(stopped), result
+          assert all(stopped[process["pid"]]["process_reaped"] and
+                     stopped[process["pid"]]["process_group_absent"]
+                     for process in result["owned_processes"]), result
+          assert not pathlib.Path(result["scratch_dir"]).exists(), result
+          PY
+      - name: Retain run evidence
+        if: always()
+        # actions/upload-artifact v4 resolved to this official commit on 2026-10-21.
+        # Source: https://github.com/actions/upload-artifact/commit/ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p23-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/evidence/ci-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Retain injected-cleanup evidence
+        if: always()
+        # actions/upload-artifact v4 resolved to this official commit on 2026-10-21.
+        # Source: https://github.com/actions/upload-artifact/commit/ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p23-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/evidence/cleanup-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: ignore
+          retention-days: 14

@@ -11,6 +11,7 @@ cctools.lint.out
 configure.rerun
 config.mk
 *.pyc
+.local/
 site/
 work_queue/src/work_queue_example
 dttools/src/jx_repl

@@ -1,0 +1,93 @@
+# The Cooperative Computing Tools
+
+## About
+
+The Cooperative Computing Tools (cctools) is a software
+package for enabling large scale distributed computing
+on clusters, clouds, and grids.  It is used primarily for
+attacking large scale problems in science and engineering.
+
+You can read more about this software at [ReadTheDocs](https://cctools.readthedocs.io)
+It is developed by members of the [Cooperative Computing Lab](https://ccl.cse.nd.edu)
+at the [University of Notre Dame](https://www.nd.edu),
+led by [Prof. Douglas Thain](https://dthain.github.io).
+The file [CREDITS](CREDITS) lists the many people that have contributed to the software over the years.
+
+## Quick Install Via Miniforge
+
+The easiest way to install the binaries is via [Miniforge](https://github.com/conda-forge/miniforge#install), a light version of Anaconda
+```
+conda install -y -c conda-forge ndcctools
+```
+
+## Build From Source
+
+To build from source and install in your home directory:
+
+```
+git clone git://github.com/cooperative-computing-lab/cctools.git cctools-src
+cd cctools-src
+unset PYTHONPATH
+conda env create -y -f environment.yml
+./configure --with-base-dir $CONDA_PREFIX --prefix $CONDA_PREFIX
+make
+make install
+```
+
+Then run the executables out of your home directory like this:
+```
+export PATH=$HOME/cctools-src/bin:$PATH
+makeflow -v
+vine_status
+```
+
+### Build From Source With Pixi
+
+As an alternative to conda, you can use [pixi](https://pixi.sh) to manage the
+build dependencies. This is primarily intended for developers: `environment.yml`
+remains the source of truth for dependencies, and `pixi.toml` is derived from it.
+If you are not developing cctools, pixi can still be used as-is to build and run
+the tools (e.g. `pixi add` in place of `conda install`).
+
+```
+git clone git://github.com/cooperative-computing-lab/cctools.git cctools-src
+cd cctools-src
+pixi run configure
+pixi run build
+pixi run install
+```
+
+Then run the executables out of the pixi environment like this:
+```
+pixi run makeflow -v
+pixi run vine_status
+```
+or activate the environment directly with `pixi shell`.
+
+## Copyright and License Notices
+
+```
+------------------------------------------------------------
+This software package is
+Copyright (c) 2003-2004 Douglas Thain
+Copyright (c) 2005-2022 The University of Notre Dame
+This software is distributed under the GNU General Public License.
+See the file COPYING for details.
+------------------------------------------------------------
+This product includes software developed by and/or derived
+from the Globus Project (http://www.globus.org/)
+to which the U.S. Government retains certain rights.
+------------------------------------------------------------
+This product includes code derived from the RSA Data
+Security, Inc. MD5 Message-Digest Algorithm.
+------------------------------------------------------------
+This product includes public domain code for the
+SHA1 algorithm written by Peter Gutmann, David Ireland,
+and A. M. Kutchman.
+------------------------------------------------------------
+This product includes the source code for the MT19937-64
+Mersenne Twister pseudorandom number generator, written by 
+Makoto Matsumoto and Takuji Nishimura.
+```
+
+

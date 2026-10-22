@@ -1,93 +1,17 @@
-# The Cooperative Computing Tools
+# Distributed I/O Interposition
 
-## About
+This project preserves the full Cooperative Computing Tools source and history, including its Parrot syscall interposer and Chirp storage service. The local extension records successful endpoint lineages from an owned read workflow, derives minimal endpoint cuts from those observed paths, and replays the workload while stopping only its loopback fixture servers.
 
-The Cooperative Computing Tools (cctools) is a software
-package for enabling large scale distributed computing
-on clusters, clouds, and grids.  It is used primarily for
-attacking large scale problems in science and engineering.
+The native runtime is Linux-only because Parrot uses `ptrace`. This Windows checkout does not emulate that behavior. Use a non-root Ubuntu 24.04 host with Python 3, GCC, G++, Make, Perl, and the usual C build tools:
 
-You can read more about this software at [ReadTheDocs](https://cctools.readthedocs.io)
-It is developed by members of the [Cooperative Computing Lab](https://ccl.cse.nd.edu)
-at the [University of Notre Dame](https://www.nd.edu),
-led by [Prof. Douglas Thain](https://dthain.github.io).
-The file [CREDITS](CREDITS) lists the many people that have contributed to the software over the years.
-
-## Quick Install Via Miniforge
-
-The easiest way to install the binaries is via [Miniforge](https://github.com/conda-forge/miniforge#install), a light version of Anaconda
-```
-conda install -y -c conda-forge ndcctools
+```sh
+python3 -m unittest discover -s coursework -p 'test_*.py' -v
+python3 coursework/verify.py --doctor
+python3 coursework/verify.py --run local-linux
 ```
 
-## Build From Source
+The driver builds only `dttools`, `chirp`, and `parrot` in disposable scratch, runs native and interposed filesystem workflows against two owned loopback Chirp servers, and saves proof under `.local/evidence/<run>/`. It uses the real `parrot_run` and `chirp_server`, passes Chirp's explicit `--no-advertise` option with an empty `CATALOG_HOST` defense-in-depth setting and Parrot's `--no-chirp-catalog` option, writes only within the run's fresh scratch/storage roots, and retains evidence after cleanup. The project-local [verification skill](.agents/skills/verify-distributed-io-interposition/SKILL.md) and [feature map](.agents/skills/verify-distributed-io-interposition/features/README.md) describe the driver and its current draft status.
 
-To build from source and install in your home directory:
+The fault explorer is intentionally bounded to at most 16 distinct endpoints. Its minimal hitting sets describe cuts over observed successful paths only; they are hypotheses for this run, not a proof of general fault tolerance. See [coursework/PROVENANCE.md](coursework/PROVENANCE.md) for source and research attribution, and [README.upstream.md](README.upstream.md) for the preserved CCTools README.
 
-```
-git clone git://github.com/cooperative-computing-lab/cctools.git cctools-src
-cd cctools-src
-unset PYTHONPATH
-conda env create -y -f environment.yml
-./configure --with-base-dir $CONDA_PREFIX --prefix $CONDA_PREFIX
-make
-make install
-```
-
-Then run the executables out of your home directory like this:
-```
-export PATH=$HOME/cctools-src/bin:$PATH
-makeflow -v
-vine_status
-```
-
-### Build From Source With Pixi
-
-As an alternative to conda, you can use [pixi](https://pixi.sh) to manage the
-build dependencies. This is primarily intended for developers: `environment.yml`
-remains the source of truth for dependencies, and `pixi.toml` is derived from it.
-If you are not developing cctools, pixi can still be used as-is to build and run
-the tools (e.g. `pixi add` in place of `conda install`).
-
-```
-git clone git://github.com/cooperative-computing-lab/cctools.git cctools-src
-cd cctools-src
-pixi run configure
-pixi run build
-pixi run install
-```
-
-Then run the executables out of the pixi environment like this:
-```
-pixi run makeflow -v
-pixi run vine_status
-```
-or activate the environment directly with `pixi shell`.
-
-## Copyright and License Notices
-
-```
-------------------------------------------------------------
-This software package is
-Copyright (c) 2003-2004 Douglas Thain
-Copyright (c) 2005-2022 The University of Notre Dame
-This software is distributed under the GNU General Public License.
-See the file COPYING for details.
-------------------------------------------------------------
-This product includes software developed by and/or derived
-from the Globus Project (http://www.globus.org/)
-to which the U.S. Government retains certain rights.
-------------------------------------------------------------
-This product includes code derived from the RSA Data
-Security, Inc. MD5 Message-Digest Algorithm.
-------------------------------------------------------------
-This product includes public domain code for the
-SHA1 algorithm written by Peter Gutmann, David Ireland,
-and A. M. Kutchman.
-------------------------------------------------------------
-This product includes the source code for the MT19937-64
-Mersenne Twister pseudorandom number generator, written by 
-Makoto Matsumoto and Takuji Nishimura.
-```
-
-
+This project is distributed under GNU GPL version 2 as a whole, consistent with the preserved upstream application. See [COPYING](COPYING) and the original per-file notices.

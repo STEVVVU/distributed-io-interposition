@@ -4,6 +4,8 @@
  * See the file COPYING for details.
  */
 
+/* Modified by Steven Vu, 2026-10-21: add an explicit opt-out for local-only servers. */
+
 #include "chirp_acl.h"
 #include "chirp_alloc.h"
 #include "chirp_audit.h"
@@ -1806,6 +1808,7 @@ static void show_help(const char *cmd)
 	fprintf(stdout, " %-30s Enable debugging for this subsystem.\n", "-d,--debug=<name>");
 	fprintf(stdout, " %-30s Send debugging to this file. (can also be :stderr, or :stdout)\n", "-o,--debug-file=<file>");
 	fprintf(stdout, " %-30s Send status updates to this host. (default: `%s')\n", "-u,--advertise=<host>", CATALOG_HOST);
+	fprintf(stdout, " %-30s Disable all catalog registration.\n", "   --no-advertise");
 	fprintf(stdout, " %-30s Show version info.\n", "-v,--version");
 	fprintf(stdout, " %-30s This message.\n", "-h,--help");
 	fprintf(stdout, "\n");
@@ -1858,6 +1861,7 @@ int main(int argc, char *argv[])
 		LONGOPT_INHERIT_DEFAULT_ACL = INT_MAX - 3,
 		LONGOPT_PROJECT_NAME = INT_MAX - 4,
 		LONGOPT_MAX_TICKET_DURATION = INT_MAX - 5,
+		LONGOPT_NO_ADVERTISE = INT_MAX - 6,
 	};
 
 	static const struct option long_options[] = {
@@ -1883,6 +1887,7 @@ int main(int argc, char *argv[])
 			{"max-clients", required_argument, 0, 'M'},
 			{"max-ticket-duration", required_argument, 0, LONGOPT_MAX_TICKET_DURATION},
 			{"no-core-dump", no_argument, 0, 'C'},
+			{"no-advertise", no_argument, 0, LONGOPT_NO_ADVERTISE},
 			{"owner", required_argument, 0, 'w'},
 			{"parent-check", required_argument, 0, 'e'},
 			{"parent-death", no_argument, 0, 'E'},
@@ -1907,6 +1912,7 @@ int main(int argc, char *argv[])
 	int c;
 	time_t current;
 	int is_daemon = 0;
+	int advertise_enabled = 1;
 	char pidfile[PATH_MAX] = "";
 	int exit_if_parent_fails = 0;
 	int dont_dump_core = 0;
@@ -2062,6 +2068,9 @@ int main(int argc, char *argv[])
 			free(ticket_duration_limit);
 			ticket_duration_limit = strdup(optarg);
 			break;
+		case LONGOPT_NO_ADVERTISE:
+			advertise_enabled = 0;
+			break;
 		case 'h':
 		default:
 			show_help(argv[0]);
@@ -2118,7 +2127,7 @@ int main(int argc, char *argv[])
 		auth_register_all();
 	}
 
-	if (!list_size(catalog_host_list)) {
+	if (advertise_enabled && !list_size(catalog_host_list)) {
 		list_push_head(catalog_host_list, CATALOG_HOST);
 	}
 
@@ -2230,7 +2239,7 @@ int main(int argc, char *argv[])
 			total_child_procs--;
 		}
 
-		if (time(0) >= advertise_alarm) {
+		if (advertise_enabled && time(0) >= advertise_alarm) {
 			run_in_child_process(update_all_catalogs, chirp_url, "catalog update");
 			advertise_alarm = time(0) + advertise_timeout;
 			chirp_stats_cleanup();
