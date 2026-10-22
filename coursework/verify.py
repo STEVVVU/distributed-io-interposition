@@ -24,10 +24,14 @@ ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / ".local"
 RUN_NAME = re.compile(r"[A-Za-z0-9_-]{1,32}\Z")
 BUILD_FLAGS = [
-    "--without-system-parrot", "--without-system-prune", "--without-system-umbrella",
+    "--without-system-prune", "--without-system-umbrella",
     "--without-system-weaver", "--with-fuse-path", "no", "--with-readline-path", "no",
     "--with-perl-path", "no",
 ]
+RUNTIME_BINARIES = {
+    "chirp_server": Path("chirp/src/chirp_server"),
+    "parrot_run": Path("parrot/src/parrot_run"),
+}
 
 
 def doctor():
@@ -68,6 +72,17 @@ def clean_environment(home, temp):
 def copy_checkout(destination):
     ignored = shutil.ignore_patterns(".git", ".local", ".pixi", "__pycache__", "*.pyc", "*.o", "*.a", "*.dylib", "config.mk")
     shutil.copytree(ROOT, destination, ignore=ignored, symlinks=True)
+
+
+def check_runtime_binaries(checkout):
+    checks = {}
+    for name, relative_path in RUNTIME_BINARIES.items():
+        binary = Path(checkout) / relative_path
+        exists = binary.is_file()
+        executable = exists and os.access(binary, os.X_OK)
+        checks[name] = {"path": str(binary), "exists": exists, "executable": executable}
+    return {"checks": checks, "ready": all(item["exists"] and item["executable"]
+                                           for item in checks.values())}
 
 
 def persist_state(state):
@@ -356,6 +371,13 @@ def exercise(args):
                     checkout, evidence / "configure.log", env)
         run_command(state, "make-runtime", ["make", "-j2", "dttools", "chirp", "parrot"],
                     checkout, evidence / "make-runtime.log", env)
+        binary_health = check_runtime_binaries(checkout)
+        state["runtime_binaries"] = binary_health
+        persist_state(state)
+        if not binary_health["ready"]:
+            missing = [name for name, item in binary_health["checks"].items()
+                       if not item["exists"] or not item["executable"]]
+            raise RuntimeError(f"runtime build completed without required executable(s): {missing}")
 
         chirp = checkout / "chirp" / "src" / "chirp_server"
         parrot = checkout / "parrot" / "src" / "parrot_run"

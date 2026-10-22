@@ -7,10 +7,25 @@ import unittest
 from pathlib import Path
 
 from workload import EXPECTED_SHA256, PAYLOAD, lifecycle, read_alternates
-from verify import finalize_state, persist_state
+from verify import check_runtime_binaries, finalize_state, persist_state, RUNTIME_BINARIES
 
 
 class WorkloadTests(unittest.TestCase):
+    def test_runtime_build_check_requires_chirp_and_parrot_executables(self):
+        with tempfile.TemporaryDirectory() as directory:
+            checkout = Path(directory)
+            missing = check_runtime_binaries(checkout)
+            self.assertFalse(missing["ready"])
+            for relative_path in RUNTIME_BINARIES.values():
+                binary = checkout / relative_path
+                binary.parent.mkdir(parents=True, exist_ok=True)
+                binary.write_bytes(b"fixture executable")
+                binary.chmod(0o700)
+            complete = check_runtime_binaries(checkout)
+        self.assertTrue(complete["ready"], complete)
+        self.assertTrue(all(item["exists"] and item["executable"]
+                            for item in complete["checks"].values()))
+
     def test_state_is_atomically_persisted_without_live_process_handles(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = Path(directory)

@@ -18,6 +18,8 @@ python3 coursework/verify.py --run fresh-linux-run
 
 The driver snapshots the checkout without `.git` into `.local/verify/<run>/scratch/checkout`, configures only that copy, builds `dttools`, `chirp`, and `parrot`, then starts each fixture server in its own owned process group on `127.0.0.1` with a fresh port. Chirp receives `--no-advertise`, an empty `CATALOG_HOST` defense-in-depth setting, `--auth=unix`, a run-private default ACL, and a run-private storage root. Parrot uses direct `/chirp/127.0.0.1:<port>/...` paths and `--no-chirp-catalog`; no external catalog or HTTP endpoint is used. Readiness is the server-created random port file plus a successful direct Chirp operation.
 
+After `make`, the driver explicitly checks that both `chirp/src/chirp_server` and `parrot/src/parrot_run` exist and are executable. A successful make exit alone does not establish that the configure package set included Parrot.
+
 ## Doctor
 
 Run `python3 coursework/verify.py --doctor`. It performs read-only checks for Linux x86-64, a non-root effective UID, Python 3, and the required compiler/build commands. A missing check exits nonzero with a JSON report. This check does not launch services or modify the checkout.
