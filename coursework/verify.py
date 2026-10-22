@@ -85,6 +85,24 @@ def check_runtime_binaries(checkout):
                                            for item in checks.values())}
 
 
+def check_catalog_registration_disabled(process_records):
+    servers = [record for record in process_records
+               if record.get("name", "").startswith("chirp-")]
+    if not servers:
+        raise RuntimeError("no owned Chirp server records are available for catalog-log verification")
+
+    checked_logs = []
+    for record in servers:
+        log_name = record.get("debug_log")
+        if not log_name:
+            raise RuntimeError(f"owned Chirp process has no debug log record: {record.get('name')}")
+        debug_log = Path(log_name)
+        if not debug_log.is_file() or "catalog update" in debug_log.read_text(encoding="utf-8", errors="replace"):
+            raise RuntimeError(f"Chirp catalog registration was not demonstrably disabled: {debug_log}")
+        checked_logs.append(str(debug_log))
+    return checked_logs
+
+
 def persist_state(state):
     """Atomically retain serializable state; private keys are in-memory only."""
     destination = Path(state["evidence_dir"]) / "result.json"
@@ -461,13 +479,10 @@ def exercise(args):
         if final_plan.get("minimal_cuts") != [["A", "B"]]:
             raise RuntimeError(f"wrong-byte outcome changed the successful-path cut: {final_plan}")
         endpoints[1].stop()
-        for process_record in state.get("owned_processes", []):
-            debug_log = Path(process_record["debug_log"])
-            if not debug_log.is_file() or "catalog update" in debug_log.read_text(encoding="utf-8", errors="replace"):
-                raise RuntimeError(f"Chirp catalog registration was not demonstrably disabled: {debug_log}")
+        checked_logs = check_catalog_registration_disabled(state.get("owned_processes", []))
         state["catalog_registration"] = {
             "disabled": True,
-            "checked_debug_logs": [process["debug_log"] for process in state.get("owned_processes", [])],
+            "checked_debug_logs": checked_logs,
         }
         state["behavior_passed"] = True
     except KeyboardInterrupt as exc:

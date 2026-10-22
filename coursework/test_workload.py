@@ -7,10 +7,28 @@ import unittest
 from pathlib import Path
 
 from workload import EXPECTED_SHA256, PAYLOAD, lifecycle, read_alternates
-from verify import check_runtime_binaries, finalize_state, persist_state, RUNTIME_BINARIES
+from verify import (check_catalog_registration_disabled, check_runtime_binaries,
+                    finalize_state, persist_state, RUNTIME_BINARIES)
 
 
 class WorkloadTests(unittest.TestCase):
+    def test_catalog_check_ignores_owned_commands_and_checks_each_chirp_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            debug = Path(directory) / "chirp.debug.log"
+            debug.write_text("server started\n", encoding="utf-8")
+            checked = check_catalog_registration_disabled([
+                {"name": "configure", "log": "configure.log"},
+                {"name": "chirp-A-1", "debug_log": str(debug)},
+            ])
+        self.assertEqual(checked, [str(debug)])
+
+    def test_catalog_check_rejects_registration_activity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            debug = Path(directory) / "chirp.debug.log"
+            debug.write_text("catalog update\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "registration was not demonstrably disabled"):
+                check_catalog_registration_disabled([{"name": "chirp-A-1", "debug_log": str(debug)}])
+
     def test_runtime_build_check_requires_chirp_and_parrot_executables(self):
         with tempfile.TemporaryDirectory() as directory:
             checkout = Path(directory)
