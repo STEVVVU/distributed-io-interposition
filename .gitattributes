@@ -8,6 +8,7 @@
 *.png -whitespace binary
 *.py whitespace=-indent-with-non-tab
 *.xml whitespace=-indent-with-non-tab,cr-at-eol
+*.yml whitespace=-indent-with-non-tab
 
 COPYING -whitespace
 
