@@ -4,3 +4,4 @@ This directory maps the real Parrot and Chirp journeys exercised by `coursework/
 
 - [Transparent remote file lifecycle](file-lifecycle.md)
 - [Lineage-driven endpoint cuts](lineage-cuts.md)
+- [Native/interposed throughput and fallback metrics](metrics.md)

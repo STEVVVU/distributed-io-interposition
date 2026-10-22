@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      metrics:
+        description: Run the frozen native versus Parrot loopback matrix
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -28,7 +33,11 @@ jobs:
       - name: Build and drive real Parrot and Chirp
         env:
           RUN_NAME: ci-${{ github.run_id }}-${{ github.run_attempt }}
-        run: python3 coursework/verify.py --run "$RUN_NAME"
+        shell: bash
+        run: |
+          options=()
+          if [[ "${{ inputs.metrics }}" == true ]]; then options+=(--metrics); fi
+          python3 coursework/verify.py --run "$RUN_NAME" "${options[@]}"
       - name: Verify owned-process cleanup after injected failure
         env:
           RUN_NAME: cleanup-${{ github.run_id }}-${{ github.run_attempt }}

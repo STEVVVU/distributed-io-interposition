@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import time
 
 
 PAYLOAD = b"owned distributed I/O fixture\n"
@@ -76,23 +77,28 @@ def read_alternates(endpoints, expected_sha256, request_id, trace_path):
     if not endpoints:
         raise ValueError("at least one endpoint is required")
     attempts = []
+    started = time.perf_counter_ns()
     for label, path in endpoints:
+        attempt_start = time.perf_counter_ns()
         try:
             with open(path, "rb") as source:
                 data = source.read()
         except OSError as exc:
-            attempts.append({"endpoint": label, "path": path, "outcome": "unavailable", "errno": exc.errno})
+            attempts.append({"endpoint": label, "path": path, "outcome": "unavailable", "errno": exc.errno,
+                             "elapsed_ns": time.perf_counter_ns() - attempt_start})
             continue
 
         actual = hashlib.sha256(data).hexdigest()
         if actual != expected_sha256:
-            attempts.append({"endpoint": label, "path": path, "outcome": "wrong-bytes", "sha256": actual})
+            attempts.append({"endpoint": label, "path": path, "outcome": "wrong-bytes", "sha256": actual,
+                             "elapsed_ns": time.perf_counter_ns() - attempt_start})
             event = {
                 "request_id": request_id, "attempts": attempts, "lineage": [],
                 "result": "wrong-bytes", "expected_sha256": expected_sha256, "sha256": actual,
             }
             break
-        attempts.append({"endpoint": label, "path": path, "outcome": "success", "sha256": actual})
+        attempts.append({"endpoint": label, "path": path, "outcome": "success", "sha256": actual,
+                         "elapsed_ns": time.perf_counter_ns() - attempt_start})
         event = {
             "request_id": request_id, "attempts": attempts, "lineage": [label],
             "result": "success", "expected_sha256": expected_sha256, "sha256": actual,
@@ -105,11 +111,72 @@ def read_alternates(endpoints, expected_sha256, request_id, trace_path):
             "sha256": None, "final_errno": attempts[-1]["errno"],
         }
 
+    event['elapsed_ns'] = time.perf_counter_ns() - started
     with open(trace_path, "a", encoding="utf-8") as trace:
         trace.write(json.dumps(event, sort_keys=True) + "\n")
         trace.flush()
         os.fsync(trace.fileno())
     return event
+
+
+def benchmark(root, size, files, metadata):
+    if not (1 <= size <= 16 * 1024 ** 2 and 1 <= files <= 256 and 1 <= metadata <= 4096):
+        raise ValueError('benchmark configuration outside bounded limits')
+    block = bytes(range(256)) * 256
+    expected = hashlib.sha256()
+    for offset in range(0, size, len(block)):
+        expected.update(block[:min(len(block), size - offset)])
+    digest = expected.hexdigest()
+    os.mkdir(root, 0o700)
+    written = read = write_calls = read_calls = 0
+    started = time.perf_counter_ns()
+    for index in range(files):
+        path = os.path.join(root, f'data-{index}')
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0), 0o600)
+        try:
+            remaining = size
+            while remaining:
+                count = os.write(descriptor, block[:min(len(block), remaining)])
+                if count <= 0:
+                    raise OSError(errno.EIO, 'write made no progress')
+                remaining -= count
+                written += count
+                write_calls += 1
+        finally:
+            os.close(descriptor)
+    write_ns = time.perf_counter_ns() - started
+    started = time.perf_counter_ns()
+    for index in range(files):
+        actual = hashlib.sha256()
+        descriptor = os.open(os.path.join(root, f'data-{index}'), os.O_RDONLY | getattr(os, 'O_BINARY', 0))
+        try:
+            while True:
+                chunk = os.read(descriptor, len(block))
+                read_calls += 1
+                if not chunk:
+                    break
+                actual.update(chunk)
+                read += len(chunk)
+        finally:
+            os.close(descriptor)
+        if actual.hexdigest() != digest:
+            raise AssertionError('benchmark read checksum mismatch')
+    read_ns = time.perf_counter_ns() - started
+    started = time.perf_counter_ns()
+    for index in range(metadata):
+        path = os.path.join(root, f'metadata-{index}')
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(descriptor)
+        if os.stat(path).st_size != 0:
+            raise AssertionError('metadata file is not empty')
+        os.unlink(path)
+    metadata_ns = time.perf_counter_ns() - started
+    if written != size * files or read != written:
+        raise AssertionError('benchmark byte counts differ')
+    return dict(size=size, files=files, written_bytes=written, read_bytes=read,
+                write_calls=write_calls, read_calls=read_calls,
+                write_ns=write_ns, read_ns=read_ns, metadata_ns=metadata_ns,
+                metadata_operations=4 * metadata, sha256=digest, errors=0)
 
 
 def parse_endpoint(value):
@@ -124,6 +191,11 @@ def main(argv=None):
     subcommands = parser.add_subparsers(dest="command", required=True)
     lifecycle_parser = subcommands.add_parser("lifecycle")
     lifecycle_parser.add_argument("--path", required=True)
+    benchmark_parser = subcommands.add_parser('benchmark')
+    benchmark_parser.add_argument('--path', required=True)
+    benchmark_parser.add_argument('--size', type=int, required=True)
+    benchmark_parser.add_argument('--files', type=int, required=True)
+    benchmark_parser.add_argument('--metadata', type=int, default=1000)
     read_parser = subcommands.add_parser("read-alternates")
     read_parser.add_argument("--endpoint", action="append", type=parse_endpoint, required=True)
     read_parser.add_argument("--expected-sha256", required=True)
@@ -133,6 +205,9 @@ def main(argv=None):
     try:
         if args.command == "lifecycle":
             result = lifecycle(args.path)
+            status = 0
+        elif args.command == 'benchmark':
+            result = benchmark(args.path, args.size, args.files, args.metadata)
             status = 0
         else:
             labels = [label for label, _ in args.endpoint]

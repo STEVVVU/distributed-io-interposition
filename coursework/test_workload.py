@@ -6,12 +6,32 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from workload import EXPECTED_SHA256, PAYLOAD, lifecycle, read_alternates
+from workload import EXPECTED_SHA256, PAYLOAD, benchmark, lifecycle, read_alternates
 from verify import (check_catalog_registration_disabled, check_runtime_binaries,
                     finalize_state, persist_state, RUNTIME_BINARIES)
 
 
 class WorkloadTests(unittest.TestCase):
+    def test_bulk_workload_checks_bytes_and_removes_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'bulk'
+            result = benchmark(str(root), 257, 2, 3)
+            stored = [(root / f'data-{index}').read_bytes() for index in range(2)]
+            metadata = list(root.glob('metadata-*'))
+        self.assertEqual(stored, [bytes(range(256)) + b'\0'] * 2)
+        self.assertEqual(result['read_bytes'], 514)
+        self.assertEqual(result['written_bytes'], 514)
+        self.assertEqual(result['metadata_operations'], 12)
+        self.assertEqual(result['errors'], 0)
+        self.assertEqual(metadata, [])
+
+    def test_bulk_workload_rejects_unbounded_input_before_creating_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'bulk'
+            with self.assertRaisesRegex(ValueError, 'bounded limits'):
+                benchmark(str(root), 2 ** 30, 1, 1)
+            self.assertFalse(root.exists())
+
     def test_catalog_check_ignores_owned_commands_and_checks_each_chirp_log(self):
         with tempfile.TemporaryDirectory() as directory:
             debug = Path(directory) / "chirp.debug.log"

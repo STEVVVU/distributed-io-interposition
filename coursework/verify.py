@@ -11,6 +11,7 @@ import platform
 import re
 import shutil
 import signal
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -148,6 +149,7 @@ def run_command(state, name, argv, cwd, log, env, timeout=1200, expected=(0,)):
     record = {"name": name, "argv": [str(value) for value in argv], "cwd": str(cwd), "log": str(log)}
     state.setdefault("commands", []).append(record)
     with log.open("wb") as output:
+        started = time.perf_counter_ns()
         process = subprocess.Popen([str(value) for value in argv], cwd=cwd, env=env, stdout=output,
                                    stderr=subprocess.STDOUT, start_new_session=True)
         record["pid"] = process.pid
@@ -160,6 +162,7 @@ def run_command(state, name, argv, cwd, log, env, timeout=1200, expected=(0,)):
             record["timed_out"] = True
             raise RuntimeError(f"command timed out: {name}; see {log}")
         finally:
+            record['elapsed_ns'] = time.perf_counter_ns() - started
             stop_process(process, state, f"command-{name}")
             record["status"] = "stopped"
             record["returncode"] = process.returncode
@@ -227,7 +230,7 @@ class ChirpEndpoint:
         self.last_port = None
         self.starts = 0
 
-    def start(self, server_binary):
+    def start(self, server_binary, debug='all'):
         if self.process is not None and self.process.poll() is None:
             raise RuntimeError(f"endpoint {self.label} is already running")
         self.starts += 1
@@ -240,7 +243,7 @@ class ChirpEndpoint:
         stdout_log = self.evidence / f"chirp-{self.label}-{self.starts}.stdout.log"
         debug_log = self.evidence / f"chirp-{self.label}-{self.starts}.debug.log"
         argv = [
-            server_binary, "--no-advertise", "--auth=unix", "--debug=all",
+            server_binary, "--no-advertise", "--auth=unix", f"--debug={debug}",
             f"--debug-file={debug_log}", "--debug-rotate-max=0", f"--default-acl={acl}",
             "--inherit-default-acl", "--interface=127.0.0.1", "--no-core-dump", "--parent-death",
             "--port=0", f"--port-file={port_file}", f"--root={self.store}", f"--transient={transient}",
@@ -314,17 +317,115 @@ def run_lifecycle(state, workload, path, name, evidence, env, cwd, parrot=None):
 
 
 def run_alternate(state, workload, endpoint_paths, trace, request_id, name, evidence, env, cwd,
-                  parrot=None, expected_status=0):
+                  parrot=None, expected_status=0, trace_syscalls=True):
     log = evidence / f"{name}.log"
     argv = [sys.executable, workload, "read-alternates", "--expected-sha256", EXPECTED_SHA256,
             "--request-id", request_id, "--trace", trace]
     for label, path in endpoint_paths:
         argv.extend(("--endpoint", f"{label}={path}"))
     if parrot:
-        argv = [parrot, "--no-chirp-catalog", "--chirp-auth=unix", "--debug=syscall",
-                f"--debug-file={evidence / (name + '.parrot.log')}", "--timeout=5", *argv]
+        tracing = ["--debug=syscall", f"--debug-file={evidence / (name + '.parrot.log')}"] if trace_syscalls else []
+        argv = [parrot, "--no-chirp-catalog", "--chirp-auth=unix", *tracing, "--timeout=5", *argv]
     run_command(state, name, argv, cwd, log, env, timeout=60, expected=(expected_status,))
     return read_json_log(log)
+
+
+def run_metrics(state, workload, endpoints, chirp, parrot, scratch, evidence, env, checkout):
+    if shutil.disk_usage(scratch).free < 10 * 1024 ** 3:
+        raise RuntimeError('metrics require at least 10 GiB free disk')
+    for command in (['lscpu'], ['free', '-b'], ['df', '-B1', str(scratch)], ['uptime'], ['gcc', '--version']):
+        run_command(state, 'environment-' + command[0], command, checkout,
+                    evidence / ('environment-' + command[0] + '.log'), env, timeout=10)
+    for endpoint in endpoints:
+        endpoint.stop()
+        endpoint.start(chirp, debug='notice')
+    samples = []
+    state['metric_samples'] = samples
+    for size, files in ((4096, 200), (1048576, 64), (16777216, 16)):
+        for trial in range(-1, 5):
+            for mode in (('native', 'interposed') if trial % 2 else ('interposed', 'native')):
+                name = f'metrics-{mode}-{size}-{trial}'
+                receiver = scratch / name if mode == 'native' else endpoints[0].store / name
+                path = str(receiver) if mode == 'native' else endpoints[0].path(name)
+                argv = [sys.executable, workload, 'benchmark', '--path', path,
+                        '--size', str(size), '--files', str(files), '--metadata', '1000']
+                if mode == 'interposed':
+                    argv = [parrot, '--no-chirp-catalog', '--chirp-auth=unix', '--timeout=5', *argv]
+                argv = ['/usr/bin/time', '-v', '-o', str(evidence / (name + '.resources')), *argv]
+                record = run_command(state, name, argv, checkout, evidence / (name + '.log'), env, timeout=300)
+                result = read_json_log(evidence / (name + '.log'))
+                if result['errors'] or result['written_bytes'] != size * files or result['read_bytes'] != size * files:
+                    raise RuntimeError(f'metrics byte/error count mismatch: {name}')
+                for index in range(files):
+                    stored = receiver / f'data-{index}'
+                    if stored.stat().st_size != size or hashlib.sha256(stored.read_bytes()).hexdigest() != result['sha256']:
+                        raise RuntimeError(f'metrics receiver checksum mismatch: {stored}')
+                if list(receiver.glob('metadata-*')):
+                    raise RuntimeError(f'metadata files survived unlink: {name}')
+                result.update(mode=mode, trial=trial, driver_wall_ns=record['elapsed_ns'], receiver_verified=True)
+                samples.append(result)
+                persist_state(state)
+                if not is_within(receiver, scratch):
+                    raise RuntimeError('metrics cleanup escaped scratch')
+                shutil.rmtree(receiver)
+    recovery = []
+    for trial in range(-1, 5):
+        modes = ['available', 'fallback', 'unavailable']
+        modes = modes[trial % 3:] + modes[:trial % 3]
+        for mode in modes:
+            for index, endpoint in enumerate(endpoints):
+                wanted = mode == 'available' or (mode == 'fallback' and index == 1)
+                if wanted and endpoint.process is None:
+                    endpoint.start(chirp, debug='notice')
+                elif not wanted and endpoint.process is not None:
+                    endpoint.stop()
+            name = f'metrics-{mode}-{trial}'
+            result = run_alternate(state, workload,
+                [(e.label, e.path(f'seed-{e.label}/payload.bin')) for e in endpoints],
+                evidence / 'metrics-events.jsonl', name, name, evidence, env, checkout,
+                parrot, 3 if mode == 'unavailable' else 0, trace_syscalls=False)
+            expected = {'available': ('success', ['A']), 'fallback': ('success', ['B']),
+                        'unavailable': ('unavailable', [])}[mode]
+            if (result['result'], result['lineage']) != expected:
+                raise RuntimeError(f'recovery state mismatch: {name}')
+            recovery.append(dict(mode=mode, trial=trial, elapsed_ns=result['elapsed_ns'],
+                                 attempts=result['attempts'], result=result['result']))
+            state['recovery_samples'] = recovery
+            persist_state(state)
+    for endpoint in endpoints:
+        if endpoint.process is None:
+            endpoint.start(chirp, debug='all')
+    profile = evidence / 'profile.parrot.log'
+    run_command(state, 'profile', [parrot, '--no-chirp-catalog', '--chirp-auth=unix', '--debug=syscall',
+                f'--debug-file={profile}', '--timeout=5', sys.executable, workload, 'benchmark',
+                '--path', endpoints[0].path('metrics-profile'), '--size', '1048576', '--files', '4', '--metadata', '100'],
+                checkout, evidence / 'profile.log', env, timeout=120)
+    summary = []
+    for mode in ('native', 'interposed'):
+        for size in (4096, 1048576, 16777216):
+            rows = [row for row in samples if row['mode'] == mode and row['size'] == size and row['trial'] >= 0]
+            if len(rows) != 5:
+                raise RuntimeError('metrics require five complete samples')
+            item = dict(mode=mode, size=size, repeats=5)
+            for field in ('write_ns', 'read_ns', 'metadata_ns', 'driver_wall_ns'):
+                values = [row[field] for row in rows]
+                item[field] = dict(median=statistics.median(values), min=min(values), max=max(values))
+            item['short_phase'] = any(row[field] < 10_000_000 for row in rows
+                                      for field in ('write_ns', 'read_ns', 'metadata_ns'))
+            for name, numerator, denominator in (('write_Bps', 'written_bytes', 'write_ns'),
+                                                 ('read_Bps', 'read_bytes', 'read_ns'),
+                                                 ('metadata_ops_s', 'metadata_operations', 'metadata_ns')):
+                values = [row[numerator] * 1e9 / row[denominator] for row in rows]
+                item[name] = dict(median=statistics.median(values), min=min(values), max=max(values))
+            summary.append(item)
+    for mode in ('available', 'fallback', 'unavailable'):
+        values = [row['elapsed_ns'] for row in recovery if row['mode'] == mode and row['trial'] >= 0]
+        if len(values) != 5:
+            raise RuntimeError('recovery requires five complete samples')
+        summary.append(dict(mode=mode, repeats=5, elapsed_ns=dict(median=statistics.median(values), min=min(values), max=max(values))))
+    (evidence / 'metrics-summary.json').write_text(json.dumps(summary, indent=2) + '\n', encoding='utf-8')
+    state['metrics_passed'] = True
+    persist_state(state)
 
 
 def load_plan(state, lineage, events, name, evidence, env, cwd):
@@ -433,6 +534,8 @@ def exercise(args):
                                                                     "sha256": hashlib.sha256(stored.read_bytes()).hexdigest()})
 
         events = evidence / "events.jsonl"
+        if args.metrics:
+            run_metrics(state, workload, endpoints, chirp, parrot, scratch, evidence, env, checkout)
         first = run_alternate(state, workload,
                               [(endpoint.label, endpoint.path(f"seed-{endpoint.label}/payload.bin")) for endpoint in endpoints],
                               events, f"{args.run}-first", "alternate-first", evidence, env, checkout, parrot)
@@ -532,9 +635,10 @@ def main(argv=None):
     group.add_argument("--run", help="execute the native Parrot and Chirp proof with a fresh run name")
     parser.add_argument("--fail-after-launch", action="store_true",
                         help="inject a controlled failure after the first owned Chirp server starts")
+    parser.add_argument('--metrics', action='store_true', help='run the frozen native/interposed metrics matrix')
     args = parser.parse_args(argv)
-    if args.doctor and args.fail_after_launch:
-        parser.error("--fail-after-launch requires --run")
+    if args.doctor and (args.fail_after_launch or args.metrics):
+        parser.error("--fail-after-launch and --metrics require --run")
     report = doctor()
     if args.doctor:
         print(json.dumps(report, indent=2, sort_keys=True))
