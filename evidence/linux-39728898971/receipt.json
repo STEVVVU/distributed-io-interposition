@@ -1,0 +1,15 @@
+{
+  "run": "ci-39728898971-1",
+  "source_head": "e497cbb6f570dfa526cafd6bf8ea3abef02a2357",
+  "passed": true,
+  "cleanup": true,
+  "behavior_passed": true,
+  "metrics_passed": true,
+  "scratch_removed": true,
+  "reaped_owned_processes": true,
+  "measured_byte_samples": 30,
+  "byte_warmups": 6,
+  "measured_recovery_samples": 15,
+  "recovery_warmups": 3,
+  "all_owned_records_stopped": true
+}
