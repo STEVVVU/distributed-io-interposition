@@ -3,6 +3,7 @@
 ## Contents
 
 - [Architecture and execution guide](#architecture-and-execution-guide)
+- [Implementation techniques](#implementation-techniques)
 - [Native measurements](#native-measurements)
 - [Source and attribution](coursework/PROVENANCE.md)
 
@@ -124,6 +125,174 @@ python3 coursework/verify.py --run local-linux
 ```
 
 The driver builds only `dttools`, `chirp`, and `parrot` in disposable scratch, runs native and interposed filesystem workflows against two owned loopback Chirp servers, and saves proof under `.local/evidence/<run>/`. It uses real `parrot_run` and `chirp_server`, disables external catalog interaction, writes only within fresh run roots, and retains evidence after cleanup. Its scope is file-system calls routed to Chirp over loopback TCP; it does not virtualize arbitrary socket calls such as `sendto`/`recvfrom` or provide HTTP GET virtualization. The project-local [verification skill](.agents/skills/verify-distributed-io-interposition/SKILL.md) and [feature map](.agents/skills/verify-distributed-io-interposition/features/README.md) record the proved journeys and limits.
+
+## Implementation techniques
+
+These cards cover the active coursework workflow and the inherited Parrot-to-Chirp filesystem path that it invokes. Rationale describes current fit in the code, not historical author intent. The interposer handles selected filesystem operations; the fixture does not virtualize arbitrary network calls.
+
+| Active subsystem | Technique cards | Source |
+| --- | --- | --- |
+| Parrot syscall tracing | [ptrace syscall interposition](#technique-ptrace-syscall-interposition) | [`tracer.c`](parrot/src/tracer.c#L91) |
+| Filesystem service dispatch to Chirp | [filesystem service dispatch](#technique-filesystem-service-dispatch) | [`pfs_service_chirp.cc`](parrot/src/pfs_service_chirp.cc#L100), [`pfs_service.cc`](parrot/src/pfs_service.cc#L360) |
+| Owned deterministic filesystem workload | [checked filesystem lifecycle](#technique-checked-filesystem-lifecycle) | [`workload.py`](coursework/workload.py#L21) |
+| Ordered reads over endpoint paths | [ordered endpoint read with byte oracle](#technique-alternating-endpoint-read) | [`workload.py`](coursework/workload.py#L76) |
+| Trace validation and path analysis | [canonical trace validation](#technique-canonical-trace-validation), [bounded minimal hitting-set enumeration](#technique-bounded-minimal-hitting-sets) | [`lineage.py`](coursework/lineage.py#L17), [`lineage.py`](coursework/lineage.py#L83) |
+| Native/interposed replay and result checks | [differential replay with byte oracle](#technique-differential-replay-and-byte-oracle) | [`verify.py`](coursework/verify.py#L439), [`workload.py`](coursework/workload.py#L76) |
+| Process ownership, cleanup, and evidence | [owned process-group cleanup with retained evidence](#technique-owned-processgroup-evidence-lifecycle) | [`verify.py`](coursework/verify.py#L107), [`verify.py`](coursework/verify.py#L175) |
+| Performance workload | [alternating native/interposed measurement](#technique-alternating-native-interposed-measurement) | [`verify.py`](coursework/verify.py#L333), [`workload.py`](coursework/workload.py#L122) |
+
+<a id="technique-ptrace-syscall-interposition"></a>
+
+<details>
+<summary>ptrace syscall interposition</summary>
+
+**Mechanism.** Parrot attaches to the child with `PTRACE_SEIZE` when available, resumes it with `PTRACE_SYSCALL`, and reads syscall numbers and arguments at stops. Its filesystem layer can replace selected operations before resuming the process. This traces system calls, not every network API or protocol.
+
+**Example.** The owned run invokes `parrot_run` on `/chirp/127.0.0.1:<port>/...`; Python's `open`, `read`, and `stat` operations reach the traced filesystem path.
+
+**Why here.** The fixture checks transparent filesystem calls from an unmodified workload against Chirp-backed storage.
+
+**Tradeoffs.** `ptrace` requires the supported Linux runtime and adds process-tracing overhead. `sendto` and `recvfrom` virtualization are outside this workflow.
+
+**Code and ownership.** Inherited CCTools code: [`tracer_attach`](parrot/src/tracer.c#L91) and [`tracer_args_get`](parrot/src/tracer.c#L208).
+
+</details>
+
+<a id="technique-filesystem-service-dispatch"></a>
+
+<details>
+<summary>filesystem service dispatch</summary>
+
+**Mechanism.** Parrot resolves a path to a filesystem service, then the Chirp service maps file operations to `chirp_global_*` calls. `pfs_file_chirp` holds the remote file handle and implements operations such as read, write, stat, and close.
+
+**Example.** Opening a `/chirp/host:port/path` yields a Chirp file object; its `read` method requests bytes from that server.
+
+**Why here.** The same POSIX-style calls used by the native workload can run over the existing Chirp client implementation.
+
+**Tradeoffs.** The supported service operations and the Chirp protocol define what paths can do. Loopback fixture evidence does not establish remote network virtualization or behavior for every service method.
+
+**Code and ownership.** Inherited CCTools code: [`pfs_file_chirp`](parrot/src/pfs_service_chirp.cc#L100), [`pfs_service_chirp`](parrot/src/pfs_service_chirp.cc#L196), and [`pfs_service_lookup`](parrot/src/pfs_service.cc#L360).
+
+</details>
+
+<a id="technique-checked-filesystem-lifecycle"></a>
+
+<details>
+<summary>checked filesystem lifecycle</summary>
+
+**Mechanism.** `lifecycle` creates a run-owned directory and exclusive file, handles partial writes in a loop, closes descriptors in `finally` blocks, changes directory, stats and reads the file, and checks the missing-file errno. It returns sizes and a SHA-256 digest for comparison.
+
+**Example.** The fixture writes `PAYLOAD`, reads it back, then requires the digest, byte count, stat size, and `ENOENT` result to match expectations.
+
+**Why here.** A compact deterministic path exercises directory, metadata, descriptor, data, and error behavior under native I/O and Parrot.
+
+**Tradeoffs.** This lifecycle proves only the operations it invokes. It does not cover concurrent writers, durability via `fsync`, or arbitrary application behavior.
+
+**Code and ownership.** Coursework extension: [`lifecycle`](coursework/workload.py#L21).
+
+</details>
+
+<a id="technique-alternating-endpoint-read"></a>
+
+<details>
+<summary>ordered endpoint read with byte oracle</summary>
+
+**Mechanism.** `read_alternates` tries endpoint paths in the supplied order. An I/O error records an unavailable attempt and continues. A successful read is accepted only when its SHA-256 matches the expected digest; it then records that endpoint as the lineage. Wrong bytes stop the read and remain distinct from unavailability.
+
+**Example.** With A unavailable and B serving the expected bytes, the trace stores both attempts and the successful lineage `B`.
+
+**Why here.** The result connects a concrete read outcome to the endpoint that supplied the checked content.
+
+**Tradeoffs.** This is sequential client fallback for reads. It does not heal servers or promise a bounded failover time under Parrot's inherited retry behavior.
+
+**Code and ownership.** Coursework extension: [`read_alternates`](coursework/workload.py#L76).
+
+</details>
+
+<a id="technique-canonical-trace-validation"></a>
+
+<details>
+<summary>canonical trace validation</summary>
+
+**Mechanism.** `read_events` parses JSON Lines and rejects malformed objects, duplicate request IDs or endpoints, invalid digests, inconsistent attempt outcomes, and lineages that disagree with the final successful endpoint. A successful event must match the expected digest. Failed events cannot carry a lineage.
+
+**Example.** An event claiming success with a different digest is rejected before the planner sees it.
+
+**Why here.** The cut search consumes trace data; schema and oracle checks prevent malformed or failed attempts from appearing as successful paths.
+
+**Tradeoffs.** Validation checks the recorded event structure and digest relationship. It does not independently prove that a trace file came from a trusted process.
+
+**Code and ownership.** Coursework extension: [`read_events`](coursework/lineage.py#L17), with deterministic rejection cases in [`LineageTests`](coursework/test_lineage.py#L25).
+
+</details>
+
+<a id="technique-bounded-minimal-hitting-sets"></a>
+
+<details>
+<summary>bounded minimal hitting-set enumeration</summary>
+
+**Mechanism.** `minimal_cuts` forms the distinct endpoint set from successful lineages, rejects empty paths and sets larger than 16, then enumerates endpoint combinations by increasing width. It skips any candidate containing an already found cut and keeps candidates that intersect every observed path.
+
+**Example.** Paths `[A]` and `[B]` produce the minimal cut `[A, B]`; paths `[A, B]` and `[A, C]` produce `[A]` and `[B, C]`.
+
+**Why here.** The bounded search proposes endpoint sets that the driver can replay against the observed workload.
+
+**Tradeoffs.** Combination enumeration is practical only within the explicit endpoint cap. Results cover captured successful paths, not unobserved execution or general fault tolerance.
+
+**Code and ownership.** Coursework extension: [`minimal_cuts`](coursework/lineage.py#L83), exercised by [`LineageTests`](coursework/test_lineage.py#L30).
+
+</details>
+
+<a id="technique-differential-replay-and-byte-oracle"></a>
+
+<details>
+<summary>differential replay with byte oracle</summary>
+
+**Mechanism.** The driver runs the lifecycle natively and through Parrot, compares result objects, and reads each receiver's stored bytes. It then stops an owned endpoint, reruns the ordered read, parses the captured trace, derives a cut, and replays endpoint failures. The digest distinguishes expected content, wrong bytes, and unavailable reads.
+
+**Example.** After A is stopped, a real successful B read adds lineage `B`; the derived `[A, B]` cut then makes the read unavailable when both fixture servers are stopped.
+
+**Why here.** This joins runtime behavior with observed traces instead of feeding a hard-coded failure matrix to the planner.
+
+**Tradeoffs.** Replays cover the fixed workload and observed endpoint paths. They do not establish failure behavior for other paths or workloads.
+
+**Code and ownership.** Coursework extension: [`exercise`](coursework/verify.py#L439), [`run_lifecycle`](coursework/verify.py#L306), and [`read_alternates`](coursework/workload.py#L76).
+
+</details>
+
+<a id="technique-owned-processgroup-evidence-lifecycle"></a>
+
+<details>
+<summary>owned process-group cleanup with retained evidence</summary>
+
+**Mechanism.** The driver starts each child in a new session, records its process group, and atomically persists state. Cleanup signals and waits for only registered children. It removes the fresh scratch tree only after all owned processes are reaped; evidence is stored separately and retained. A passing result requires both behavior and cleanup success.
+
+**Example.** The injected post-launch failure exits unsuccessfully but records stopped processes, successful cleanup, and retained failure evidence.
+
+**Why here.** Fixture servers and build artifacts need a bounded lifetime without erasing the records used to diagnose a failure.
+
+**Tradeoffs.** A process the driver cannot reap makes cleanup fail and prevents a passing result. A process surviving an interrupted driver may need inspection using its recorded PID and command line.
+
+**Code and ownership.** Coursework extension: [`persist_state`](coursework/verify.py#L107), [`stop_process`](coursework/verify.py#L175), and [`finalize_state`](coursework/verify.py#L137).
+
+</details>
+
+<a id="technique-alternating-native-interposed-measurement"></a>
+
+<details>
+<summary>alternating native/interposed measurement</summary>
+
+**Mechanism.** The optional metrics path uses bounded file-size, file-count, and metadata-cycle inputs. It warms each mode, alternates native and interposed trial order, times write, read-with-hash, and metadata phases, then checks receiver sizes and hashes outside the timed region. The results retain samples and environment details for summaries.
+
+**Example.** Each trial writes and reads deterministic blocks, verifies the remote receiver, and removes only its owned payload directory after validation.
+
+**Why here.** Alternating order exposes both execution paths under the same workload and captures the cost of this fixture setup.
+
+**Tradeoffs.** Reads follow writes with warm caches, files are closed without `fsync`, and the live Chirp server is outside client/Parrot resource accounting. These measurements do not describe durable storage or general network capacity.
+
+**Code and ownership.** Coursework extension: [`run_metrics`](coursework/verify.py#L333) and [`benchmark`](coursework/workload.py#L122).
+
+</details>
 
 ## Native measurements
 
