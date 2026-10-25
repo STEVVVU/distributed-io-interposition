@@ -9,6 +9,335 @@
 
 ## Architecture and execution guide
 
+<!-- execution-flow:start -->
+### Execution flow
+
+Start with the primary path, then expand a detailed workflow. Select a numbered node to see its operation, implementation techniques, and source. Solid arrows show the named control, data, or lifecycle handoff; dotted arrows show error paths. Separate entry points are named in each workflow.
+
+<a id="review-walkthrough"></a>
+
+#### Walk through one concrete example
+
+Run one supported filesystem read while the owned loopback endpoint fixtures are active, then replay the captured endpoint order with endpoint A stopped.
+
+**Trace.** [Admit a fresh supported run](#flow-step-admit-run) → [Start owned loopback Chirp fixtures](#flow-step-start-fixtures) → [Read endpoints in supplied order](#flow-step-ordered-read) → [Enumerate bounded minimal endpoint cuts](#flow-step-bound-cuts) → [Record unavailable and wrong-byte outcomes](#flow-step-failure-replays) → [Persist run state and evidence](#flow-step-persist-evidence) → [Stop owned groups and retain receipt](#flow-step-cleanup-owned).
+
+**Result and boundary.** The trace is checked against the filesystem lifecycle, then endpoint cuts are replayed to record unavailable and wrong-byte outcomes. Owned processes are stopped and a receipt is retained; this is a bounded endpoint model, not general production fault tolerance evidence.
+
+<details>
+<summary>Implementation decisions to explain</summary>
+
+**Why replay endpoint reads in their supplied order?** Replay preserves the observed sequence so the endpoint failure experiment tests the same ordering. It is limited to the captured trace and configured fixture behavior.
+
+[ordered endpoint read with byte oracle](#technique-alternating-endpoint-read).
+
+**Why enumerate bounded minimal endpoint cuts?** The bounded search identifies minimal endpoint sets whose failure intersects every relevant read path. The result depends on the configured bounds and modeled paths.
+
+[bounded minimal hitting-set enumeration](#technique-bounded-minimal-hitting-sets).
+
+</details>
+
+#### Primary execution flow
+
+The --run path admits a fresh supported environment, builds and exercises native and Parrot-backed file operations, analyzes actual successful endpoint traces, replays selected failures, and cleans up owned processes. Optional --metrics is an independent driver branch.
+
+```mermaid
+flowchart TD
+n1["1. Admit a fresh supported run"]
+click n1 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-admit-run" "Open step, techniques, and source" _top
+n2["2. Build runtime in scratch"]
+click n2 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-build-runtime" "Open step, techniques, and source" _top
+n3["3. Run native lifecycle control"]
+click n3 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-native-control" "Open step, techniques, and source" _top
+n4["4. Start owned loopback Chirp<br/>fixtures"]
+click n4 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-start-fixtures" "Open step, techniques, and source" _top
+n8["8. Compare remote lifecycle with<br/>native"]
+click n8 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-seed-comparison" "Open step, techniques, and source" _top
+n9["9. Read endpoints in supplied<br/>order"]
+click n9 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-ordered-read" "Open step, techniques, and source" _top
+n11["11. Enumerate bounded minimal<br/>endpoint cuts"]
+click n11 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-bound-cuts" "Open step, techniques, and source" _top
+n12["12. Stop endpoint A and replay"]
+click n12 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-stop-first" "Open step, techniques, and source" _top
+n13["13. Record unavailable and<br/>wrong-byte outcomes"]
+click n13 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-failure-replays" "Open step, techniques, and source" _top
+n15["15. Persist run state and<br/>evidence"]
+click n15 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-persist-evidence" "Open step, techniques, and source" _top
+n16["16. Stop owned groups and retain<br/>receipt"]
+click n16 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-cleanup-owned" "Open step, techniques, and source" _top
+n1 -->|"supported --run and fresh scoped paths"| n2
+n2 -->|"required binaries present"| n3
+n3 -->|"native result checked"| n4
+n8 -->|"both seeded endpoint paths provided"| n9
+n11 -->|"initial cut checked before A is<br/>stopped"| n12
+n12 -->|"B fallback established; then both down<br/>and wrong bytes injected"| n13
+n13 -->|"results and errors update run state"| n15
+n15 -->|"finally executes on success or<br/>exception"| n16
+n4 -->|"run remote lifecycle and compare<br/>native bytes; detailed path below"| n8
+n9 -->|"validate event log and enumerate<br/>observed cuts; detailed path below"| n11
+```
+
+**Detailed workflows.** [Trace a filesystem read and replay endpoint failures](#flow-workflow-filesystem-read-and-replay) · [Run the optional native and interposed measurement path](#flow-workflow-optional-measurement).
+
+<a id="flow-workflow-filesystem-read-and-replay"></a>
+
+<details>
+<summary>Trace a filesystem read and replay endpoint failures</summary>
+
+Starts at the scoped Parrot workload command. Parrot resolves supported filesystem calls to Chirp, while lineage planning consumes actual successful JSONL events and bounded replay alters only owned fixtures.
+
+```mermaid
+flowchart TD
+n4["4. Start owned loopback Chirp<br/>fixtures"]
+click n4 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-start-fixtures" "Open step, techniques, and source" _top
+n5["5. Trace filesystem calls into<br/>Chirp"]
+click n5 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-parrot-trace" "Open step, techniques, and source" _top
+n6["6. Dispatch file operations to<br/>Chirp"]
+click n6 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-chirp-file-ops" "Open step, techniques, and source" _top
+n7["7. Check file lifecycle and<br/>bytes"]
+click n7 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-checked-lifecycle" "Open step, techniques, and source" _top
+n8["8. Compare remote lifecycle with<br/>native"]
+click n8 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-seed-comparison" "Open step, techniques, and source" _top
+n9["9. Read endpoints in supplied<br/>order"]
+click n9 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-ordered-read" "Open step, techniques, and source" _top
+n10["10. Validate recorded endpoint<br/>events"]
+click n10 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-parse-observations" "Open step, techniques, and source" _top
+n11["11. Enumerate bounded minimal<br/>endpoint cuts"]
+click n11 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-bound-cuts" "Open step, techniques, and source" _top
+n12["12. Stop endpoint A and replay"]
+click n12 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-stop-first" "Open step, techniques, and source" _top
+n13["13. Record unavailable and<br/>wrong-byte outcomes"]
+click n13 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-failure-replays" "Open step, techniques, and source" _top
+n15["15. Persist run state and<br/>evidence"]
+click n15 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-persist-evidence" "Open step, techniques, and source" _top
+n16["16. Stop owned groups and retain<br/>receipt"]
+click n16 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-cleanup-owned" "Open step, techniques, and source" _top
+n4 -->|"fixture endpoint path supplied to<br/>parrot_run"| n5
+n5 -->|"filesystem path resolves to Chirp<br/>service"| n6
+n6 -->|"remote file operation returns to<br/>workload"| n7
+n7 -->|"lifecycle result and stored bytes<br/>compared"| n8
+n8 -->|"both seeded endpoint paths provided"| n9
+n9 -->|"JSONL event file consumed"| n10
+n10 -->|"validated successful events"| n11
+n11 -->|"initial cut checked before A is<br/>stopped"| n12
+n12 -->|"fallback B then unavailable and<br/>wrong-byte replays"| n13
+n13 -->|"results and errors update run state"| n15
+n15 -->|"finally executes on success or<br/>exception"| n16
+```
+
+</details>
+
+<a id="flow-workflow-optional-measurement"></a>
+
+<details>
+<summary>Run the optional native and interposed measurement path</summary>
+
+This path starts only with --metrics after the driver has built the runtime and started fixture endpoints. It is a distinct mode, not a dispatcher stage in ordinary replay.
+
+```mermaid
+flowchart TD
+n4["4. Start owned loopback Chirp<br/>fixtures"]
+click n4 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-start-fixtures" "Open step, techniques, and source" _top
+n14["14. Measure alternating native<br/>and interposed runs"]
+click n14 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-metrics-matrix" "Open step, techniques, and source" _top
+n15["15. Persist run state and<br/>evidence"]
+click n15 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-persist-evidence" "Open step, techniques, and source" _top
+n16["16. Stop owned groups and retain<br/>receipt"]
+click n16 href "https://github.com/STEVVVU/distributed-io-interposition#flow-step-cleanup-owned" "Open step, techniques, and source" _top
+n4 -->|"--metrics enabled"| n14
+n14 -->|"metric samples and summary recorded"| n15
+n15 -->|"finally runs after metrics path"| n16
+```
+
+</details>
+
+#### Steps, techniques, and source
+
+These source traces cover the active scope below. They explain implementation behavior; benchmark results and their limits remain in the measurement sections.
+
+<a id="flow-step-admit-run"></a>
+
+##### 1. Admit a fresh supported run
+
+**Component.** coursework/verify.py:main,doctor,exercise. --doctor checks Linux, non-root x86-64, tools, and paths without changing files. --run rejects an unsupported host, reused run name, invalid name, or paths outside .local before creating run-owned evidence and scratch.
+
+**Techniques at this step.** [owned process-group cleanup with retained evidence](#technique-owned-processgroup-evidence-lifecycle).
+
+**Source.** [`coursework/verify.py:35`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/verify.py#L35) · [`coursework/verify.py:439`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/verify.py#L439). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-build-runtime"></a>
+
+##### 2. Build runtime in scratch
+
+**Component.** coursework/verify.py:exercise. The driver copies the checkout into fresh scratch, configures it with fixed flags, builds dttools, chirp, and parrot, then checks the expected executables. A failed command or missing binary enters the exception path and retains failure state.
+
+**Techniques at this step.** [owned process-group cleanup with retained evidence](#technique-owned-processgroup-evidence-lifecycle).
+
+**Source.** [`coursework/verify.py:487`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/verify.py#L487). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-native-control"></a>
+
+##### 3. Run native lifecycle control
+
+**Component.** coursework/verify.py:run_lifecycle; coursework/workload.py:lifecycle. The driver runs the deterministic lifecycle on a scratch-local native path and records its sizes, digest, and missing-file result. It then runs the ordered-read command against that native file and checks the resulting digest against the lifecycle output.
+
+**Techniques at this step.** [checked filesystem lifecycle](#technique-checked-filesystem-lifecycle) · [differential replay with byte oracle](#technique-differential-replay-and-byte-oracle).
+
+**Source.** [`coursework/verify.py:306`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/verify.py#L306) · [`coursework/verify.py:504`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/verify.py#L504) · [`coursework/workload.py:21`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/workload.py#L21). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-start-fixtures"></a>
+
+##### 4. Start owned loopback Chirp fixtures
+
+**Component.** coursework/verify.py:ChirpEndpoint.start. The driver starts two Chirp child processes with separate scratch stores and loopback endpoints. It disables catalog advertising and tracks each owned process group; a configured failure immediately after first launch still reaches cleanup.
+
+**Techniques at this step.** [owned process-group cleanup with retained evidence](#technique-owned-processgroup-evidence-lifecycle).
+
+**Source.** [`coursework/verify.py:223`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/verify.py#L223). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-parrot-trace"></a>
+
+##### 5. Trace filesystem calls into Chirp
+
+**Component.** parrot/src/tracer.c:tracer_attach,tracer_args_get; parrot/src/pfs_service.cc:pfs_service_lookup. Parrot attaches to the child with ptrace, inspects syscall stops and arguments, and resolves supported filesystem paths to a service. The /chirp path selects the Chirp service; arbitrary socket calls are not part of this filesystem path.
+
+**Techniques at this step.** [ptrace syscall interposition](#technique-ptrace-syscall-interposition) · [filesystem service dispatch](#technique-filesystem-service-dispatch).
+
+**Source.** [`parrot/src/tracer.c:91`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/parrot/src/tracer.c#L91) · [`parrot/src/tracer.c:208`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/parrot/src/tracer.c#L208) · [`parrot/src/pfs_service.cc:360`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/parrot/src/pfs_service.cc#L360). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-chirp-file-ops"></a>
+
+##### 6. Dispatch file operations to Chirp
+
+**Component.** parrot/src/pfs_service_chirp.cc:pfs_file_chirp,pfs_service_chirp. The selected service maps file operations to Chirp client calls. The remote file object carries the handle used for reads and other supported operations, which reach the owned loopback server and its run-scoped store.
+
+**Techniques at this step.** [filesystem service dispatch](#technique-filesystem-service-dispatch).
+
+**Source.** [`parrot/src/pfs_service_chirp.cc:100`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/parrot/src/pfs_service_chirp.cc#L100) · [`parrot/src/pfs_service_chirp.cc:196`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/parrot/src/pfs_service_chirp.cc#L196). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-checked-lifecycle"></a>
+
+##### 7. Check file lifecycle and bytes
+
+**Component.** coursework/workload.py:lifecycle. The workload creates its directory and exclusive file, loops over partial writes, closes descriptors in finally blocks, changes directory, checks stat and read results, and verifies the missing-file errno. It returns byte counts and a SHA-256 digest for comparison.
+
+**Techniques at this step.** [checked filesystem lifecycle](#technique-checked-filesystem-lifecycle).
+
+**Source.** [`coursework/workload.py:21`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/workload.py#L21). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-seed-comparison"></a>
+
+##### 8. Compare remote lifecycle with native
+
+**Component.** coursework/verify.py:exercise. For each endpoint, the driver runs lifecycle through Parrot and compares its result with the native control. It also reads the fixture file back directly and checks the expected payload bytes before recording receiver-side evidence.
+
+**Techniques at this step.** [differential replay with byte oracle](#technique-differential-replay-and-byte-oracle).
+
+**Source.** [`coursework/verify.py:521`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/verify.py#L521). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-ordered-read"></a>
+
+##### 9. Read endpoints in supplied order
+
+**Component.** coursework/workload.py:read_alternates. The workload tries endpoint paths in order. An I/O error records an unavailable attempt and continues; a digest mismatch returns wrong-bytes without claiming lineage; matching bytes record the successful endpoint path.
+
+**Techniques at this step.** [ordered endpoint read with byte oracle](#technique-alternating-endpoint-read).
+
+**Source.** [`coursework/workload.py:76`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/workload.py#L76). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-parse-observations"></a>
+
+##### 10. Validate recorded endpoint events
+
+**Component.** coursework/lineage.py:read_events. The analyzer parses JSONL events and rejects malformed fields, duplicate IDs or endpoints, invalid digests, inconsistent attempt results, and lineages that disagree with successful byte verification. Failed events do not become successful paths.
+
+**Techniques at this step.** [canonical trace validation](#technique-canonical-trace-validation).
+
+**Source.** [`coursework/lineage.py:17`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/lineage.py#L17). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-bound-cuts"></a>
+
+##### 11. Enumerate bounded minimal endpoint cuts
+
+**Component.** coursework/lineage.py:minimal_cuts. The planner derives minimal endpoint sets that intersect every recorded successful lineage. It refuses search above the 16-endpoint bound; its output describes only paths present in the validated trace.
+
+**Techniques at this step.** [bounded minimal hitting-set enumeration](#technique-bounded-minimal-hitting-sets).
+
+**Source.** [`coursework/lineage.py:83`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/lineage.py#L83). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-stop-first"></a>
+
+##### 12. Stop endpoint A and replay
+
+**Component.** coursework/verify.py:exercise,ChirpEndpoint.stop. After observing lineage A and its initial cut, the driver stops only endpoint A and reruns the same ordered read. The expected successful read from B adds the observed alternative path and changes the minimal cut for the observed paths to [A,B].
+
+**Techniques at this step.** [differential replay with byte oracle](#technique-differential-replay-and-byte-oracle) · [owned process-group cleanup with retained evidence](#technique-owned-processgroup-evidence-lifecycle).
+
+**Source.** [`coursework/verify.py:548`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/verify.py#L548). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-failure-replays"></a>
+
+##### 13. Record unavailable and wrong-byte outcomes
+
+**Component.** coursework/verify.py:exercise; coursework/workload.py:read_alternates. With both endpoints stopped, replay must report unavailable and preserve the cut from successful events. The driver then serves wrong bytes from B; replay reports wrong-bytes, records no successful lineage, and leaves the cut unchanged.
+
+**Techniques at this step.** [ordered endpoint read with byte oracle](#technique-alternating-endpoint-read) · [differential replay with byte oracle](#technique-differential-replay-and-byte-oracle).
+
+**Source.** [`coursework/verify.py:562`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/verify.py#L562) · [`coursework/workload.py:76`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/workload.py#L76). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-metrics-matrix"></a>
+
+##### 14. Measure alternating native and interposed runs
+
+**Component.** coursework/verify.py:run_metrics; coursework/workload.py:benchmark. When --metrics is set, the driver checks free space, captures environment data, restarts owned fixtures, and alternates native and Parrot benchmark order across file sizes and trials. It verifies bytes, hashes, and metadata cleanup, then summarizes timings; this is a separate optional command path, not a stage of default replay.
+
+**Techniques at this step.** [alternating native/interposed measurement](#technique-alternating-native-interposed-measurement).
+
+**Source.** [`coursework/verify.py:333`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/verify.py#L333) · [`coursework/workload.py:122`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/workload.py#L122). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-persist-evidence"></a>
+
+##### 15. Persist run state and evidence
+
+**Component.** coursework/verify.py:persist_state,finalize_state. The driver writes state and command records under the run evidence directory as work proceeds. Finalization records pass state, cleanup errors, scratch removal, and whether owned processes were reaped; evidence remains after scratch cleanup.
+
+**Techniques at this step.** [owned process-group cleanup with retained evidence](#technique-owned-processgroup-evidence-lifecycle).
+
+**Source.** [`coursework/verify.py:107`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/verify.py#L107) · [`coursework/verify.py:137`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/verify.py#L137). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-cleanup-owned"></a>
+
+##### 16. Stop owned groups and retain receipt
+
+**Component.** coursework/verify.py:stop_process,exercise. The finally block stops endpoints and remaining tracked child process groups in reverse order, records cleanup failures, and removes scratch only after all owned processes are reaped and the path remains inside the owned root. Evidence is retained.
+
+**Techniques at this step.** [owned process-group cleanup with retained evidence](#technique-owned-processgroup-evidence-lifecycle).
+
+**Source.** [`coursework/verify.py:175`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/verify.py#L175) · [`coursework/verify.py:618`](https://github.com/STEVVVU/distributed-io-interposition/blob/master/coursework/verify.py#L618). [Back to execution flow](#execution-flow).
+
+<details>
+<summary>Scope and subsystem coverage</summary>
+
+coursework/verify.py --run lifecycle from host admission through Parrot-to-Chirp filesystem operations, owned workload, observed endpoint lineage, bounded cuts, selected replay, optional native/interposed measurement, and evidence cleanup.
+
+- **Parrot filesystem syscall interposition to Chirp.** Trace attach and argument reads lead through filesystem service lookup to the inherited Chirp file implementation; arbitrary network calls are outside this path. [Step 5](#flow-step-parrot-trace), [Step 6](#flow-step-chirp-file-ops).
+- **Owned deterministic filesystem workload.** The lifecycle checks filesystem outcomes and ordered reads distinguish unavailable endpoints from wrong bytes. [Step 7](#flow-step-checked-lifecycle), [Step 9](#flow-step-ordered-read).
+- **Observed trace validation and cut analysis.** Only validated successful observed paths contribute to the bounded 16-endpoint minimal cut search. [Step 10](#flow-step-parse-observations), [Step 11](#flow-step-bound-cuts).
+- **Native/interposed replay, measurement, and evidence cleanup.** Native control, interposed comparisons, endpoint replay, opt-in metrics, and owned process/evidence lifecycle are represented on their actual driver paths. [Step 3](#flow-step-native-control), [Step 8](#flow-step-seed-comparison), [Step 12](#flow-step-stop-first), [Step 13](#flow-step-failure-replays), [Step 14](#flow-step-metrics-matrix), [Step 15](#flow-step-persist-evidence), [Step 16](#flow-step-cleanup-owned).
+
+Outside this flow audit:
+
+- `Parrot socket calls, HTTP virtualization, and general network virtualization`. The mapped workflow invokes filesystem paths through the Chirp service and does not virtualize these call classes.
+- `Unrelated CCTools applications and standalone examples`. They are not invoked by coursework/verify.py.
+- `General LDFI or fault-tolerance certification`. The planner considers recorded successful paths only and bounds endpoint count to 16.
+
+</details>
+
+<!-- execution-flow:end -->
+
+<details>
+<summary>Subsystem technique index</summary>
+
 ### Subsystem map
 
 Select a subsystem in the diagram to open its techniques, tradeoffs, and code references. The numbered links provide the same navigation. This map groups components; the execution diagrams show their runtime flow.
@@ -34,6 +363,8 @@ click s4 href "https://github.com/STEVVVU/distributed-io-interposition#subsystem
 This repository preserves CCTools, including the [Parrot](#parrot) syscall interposer and [Chirp](#chirp) storage service. The local extension adds an owned read workflow, [endpoint-lineage](#endpoint-lineage) analysis, a bounded cut explorer, and replay of selected failure cases. Parrot and Chirp remain inherited components; the extension does not virtualize arbitrary network calls or provide general fault-tolerance guarantees.
 
 The diagram separates the workflow tools from the preserved runtime.
+
+</details>
 
 <details>
 <summary>Expand flow diagram 1</summary>
