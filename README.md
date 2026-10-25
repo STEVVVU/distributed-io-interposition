@@ -9,9 +9,34 @@
 
 ## Architecture and execution guide
 
+### Subsystem map
+
+Select a subsystem in the diagram to open its techniques, tradeoffs, and code references. The numbered links provide the same navigation. This map groups components; the execution diagrams show their runtime flow.
+
+```mermaid
+flowchart LR
+system["Distributed I/O<br/>Interposition"]
+system --> s1["1. Parrot filesystem syscall<br/>interposition to Chirp"]
+click s1 href "https://github.com/STEVVVU/distributed-io-interposition#subsystem-parrot-filesystem-syscall-interposition-to-chirp" "Explore Parrot filesystem syscall interposition to Chirp" _top
+system --> s2["2. Owned deterministic filesystem<br/>workload"]
+click s2 href "https://github.com/STEVVVU/distributed-io-interposition#subsystem-owned-deterministic-filesystem-workload" "Explore Owned deterministic filesystem workload" _top
+system --> s3["3. Observed trace validation and<br/>cut analysis"]
+click s3 href "https://github.com/STEVVVU/distributed-io-interposition#subsystem-observed-trace-validation-and-cut-analysis" "Explore Observed trace validation and cut analysis" _top
+system --> s4["4. Native/interposed replay,<br/>measurement, and evidence cleanup"]
+click s4 href "https://github.com/STEVVVU/distributed-io-interposition#subsystem-nativeinterposed-replay-measurement-and-evidence-cleanup" "Explore Native/interposed replay, measurement, and evidence cleanup" _top
+```
+
+1. [Parrot filesystem syscall interposition to Chirp](#subsystem-parrot-filesystem-syscall-interposition-to-chirp)
+2. [Owned deterministic filesystem workload](#subsystem-owned-deterministic-filesystem-workload)
+3. [Observed trace validation and cut analysis](#subsystem-observed-trace-validation-and-cut-analysis)
+4. [Native/interposed replay, measurement, and evidence cleanup](#subsystem-nativeinterposed-replay-measurement-and-evidence-cleanup)
+
 This repository preserves CCTools, including the [Parrot](#parrot) syscall interposer and [Chirp](#chirp) storage service. The local extension adds an owned read workflow, [endpoint-lineage](#endpoint-lineage) analysis, a bounded cut explorer, and replay of selected failure cases. Parrot and Chirp remain inherited components; the extension does not virtualize arbitrary network calls or provide general fault-tolerance guarantees.
 
 The diagram separates the workflow tools from the preserved runtime.
+
+<details>
+<summary>Expand flow diagram 1</summary>
 
 ```mermaid
 flowchart LR
@@ -26,7 +51,12 @@ Replay --> Chirp
 Driver --> Evidence["Retained evidence"]
 ```
 
+</details>
+
 The driver starts only its fixture servers, writes into fresh run roots, records successful endpoint paths, and replays bounded endpoint failures. The lineage module reduces observed paths to [minimal hitting sets](#hitting-set). Replay tests those cuts against this workload; it cannot infer paths or failure behavior that the successful run never observed. Cleanup stops only [driver-owned processes](#owned-process), while evidence remains after scratch cleanup.
+
+<details>
+<summary>Expand flow diagram 2</summary>
 
 ```mermaid
 flowchart TD
@@ -48,6 +78,8 @@ Outcome -->|"check or cleanup fails"| Fail["Retain failure evidence"]
 Keep --> Stop["Stop owned fixture processes"]
 Fail --> Stop
 ```
+
+</details>
 
 | Subsystem | Responsibility and owned invariant | Source |
 | --- | --- | --- |
@@ -130,6 +162,9 @@ The driver builds only `dttools`, `chirp`, and `parrot` in disposable scratch, r
 
 These cards cover the active coursework workflow and the inherited Parrot-to-Chirp filesystem path that it invokes. Rationale describes current fit in the code, not historical author intent. The interposer handles selected filesystem operations; the fixture does not virtualize arbitrary network calls.
 
+<details>
+<summary>Full technique index</summary>
+
 | Active subsystem | Technique cards | Source |
 | --- | --- | --- |
 | Parrot syscall tracing | [ptrace syscall interposition](#technique-ptrace-syscall-interposition) | [`tracer.c`](parrot/src/tracer.c#L91) |
@@ -140,6 +175,20 @@ These cards cover the active coursework workflow and the inherited Parrot-to-Chi
 | Native/interposed replay and result checks | [differential replay with byte oracle](#technique-differential-replay-and-byte-oracle) | [`verify.py`](coursework/verify.py#L439), [`workload.py`](coursework/workload.py#L76) |
 | Process ownership, cleanup, and evidence | [owned process-group cleanup with retained evidence](#technique-owned-processgroup-evidence-lifecycle) | [`verify.py`](coursework/verify.py#L107), [`verify.py`](coursework/verify.py#L175) |
 | Performance workload | [alternating native/interposed measurement](#technique-alternating-native-interposed-measurement) | [`verify.py`](coursework/verify.py#L333), [`workload.py`](coursework/workload.py#L122) |
+
+</details>
+
+<a id="subsystem-parrot-filesystem-syscall-interposition-to-chirp"></a>
+
+### 1. Parrot filesystem syscall interposition to Chirp
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`parrot/src/tracer.c`](parrot/src/tracer.c), [`parrot/src/pfs_service_chirp.cc`](parrot/src/pfs_service_chirp.cc), [`parrot/src/pfs_service.cc`](parrot/src/pfs_service.cc).
+
+**Techniques.** [ptrace syscall interposition](#technique-ptrace-syscall-interposition), [filesystem service dispatch](#technique-filesystem-service-dispatch).
+
+**Related concepts.** [syscall interposition](#syscall-interposition), [Chirp](#chirp), [Parrot](#parrot).
 
 <a id="technique-ptrace-syscall-interposition"></a>
 
@@ -155,6 +204,10 @@ These cards cover the active coursework workflow and the inherited Parrot-to-Chi
 **Tradeoffs.** `ptrace` requires the supported Linux runtime and adds process-tracing overhead. `sendto` and `recvfrom` virtualization are outside this workflow.
 
 **Code and ownership.** Inherited CCTools code: [`tracer_attach`](parrot/src/tracer.c#L91) and [`tracer_args_get`](parrot/src/tracer.c#L208).
+
+
+
+**Used in.** [Parrot filesystem syscall interposition to Chirp](#subsystem-parrot-filesystem-syscall-interposition-to-chirp). [Back to the subsystem map](#architecture-and-execution-guide).
 
 </details>
 
@@ -173,7 +226,23 @@ These cards cover the active coursework workflow and the inherited Parrot-to-Chi
 
 **Code and ownership.** Inherited CCTools code: [`pfs_file_chirp`](parrot/src/pfs_service_chirp.cc#L100), [`pfs_service_chirp`](parrot/src/pfs_service_chirp.cc#L196), and [`pfs_service_lookup`](parrot/src/pfs_service.cc#L360).
 
+
+
+**Used in.** [Parrot filesystem syscall interposition to Chirp](#subsystem-parrot-filesystem-syscall-interposition-to-chirp). [Back to the subsystem map](#architecture-and-execution-guide).
+
 </details>
+
+<a id="subsystem-owned-deterministic-filesystem-workload"></a>
+
+### 2. Owned deterministic filesystem workload
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`coursework/workload.py`](coursework/workload.py).
+
+**Techniques.** [checked filesystem lifecycle](#technique-checked-filesystem-lifecycle), [ordered endpoint read with byte oracle](#technique-alternating-endpoint-read).
+
+**Related concepts.** [Parrot](#parrot).
 
 <a id="technique-checked-filesystem-lifecycle"></a>
 
@@ -189,6 +258,10 @@ These cards cover the active coursework workflow and the inherited Parrot-to-Chi
 **Tradeoffs.** This lifecycle proves only the operations it invokes. It does not cover concurrent writers, durability via `fsync`, or arbitrary application behavior.
 
 **Code and ownership.** Coursework extension: [`lifecycle`](coursework/workload.py#L21).
+
+
+
+**Used in.** [Owned deterministic filesystem workload](#subsystem-owned-deterministic-filesystem-workload). [Back to the subsystem map](#architecture-and-execution-guide).
 
 </details>
 
@@ -207,7 +280,21 @@ These cards cover the active coursework workflow and the inherited Parrot-to-Chi
 
 **Code and ownership.** Coursework extension: [`read_alternates`](coursework/workload.py#L76).
 
+
+
+**Used in.** [Owned deterministic filesystem workload](#subsystem-owned-deterministic-filesystem-workload). [Back to the subsystem map](#architecture-and-execution-guide).
+
 </details>
+
+<a id="subsystem-observed-trace-validation-and-cut-analysis"></a>
+
+### 3. Observed trace validation and cut analysis
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`coursework/lineage.py`](coursework/lineage.py), [`coursework/test_lineage.py`](coursework/test_lineage.py).
+
+**Techniques.** [canonical trace validation](#technique-canonical-trace-validation), [bounded minimal hitting-set enumeration](#technique-bounded-minimal-hitting-sets).
 
 <a id="technique-canonical-trace-validation"></a>
 
@@ -223,6 +310,10 @@ These cards cover the active coursework workflow and the inherited Parrot-to-Chi
 **Tradeoffs.** Validation checks the recorded event structure and digest relationship. It does not independently prove that a trace file came from a trusted process.
 
 **Code and ownership.** Coursework extension: [`read_events`](coursework/lineage.py#L17), with deterministic rejection cases in [`LineageTests`](coursework/test_lineage.py#L25).
+
+
+
+**Used in.** [Observed trace validation and cut analysis](#subsystem-observed-trace-validation-and-cut-analysis). [Back to the subsystem map](#architecture-and-execution-guide).
 
 </details>
 
@@ -241,7 +332,23 @@ These cards cover the active coursework workflow and the inherited Parrot-to-Chi
 
 **Code and ownership.** Coursework extension: [`minimal_cuts`](coursework/lineage.py#L83), exercised by [`LineageTests`](coursework/test_lineage.py#L30).
 
+
+
+**Used in.** [Observed trace validation and cut analysis](#subsystem-observed-trace-validation-and-cut-analysis). [Back to the subsystem map](#architecture-and-execution-guide).
+
 </details>
+
+<a id="subsystem-nativeinterposed-replay-measurement-and-evidence-cleanup"></a>
+
+### 4. Native/interposed replay, measurement, and evidence cleanup
+
+[Back to the subsystem map](#architecture-and-execution-guide).
+
+**Code.** [`coursework/verify.py`](coursework/verify.py), [`coursework/test_workload.py`](coursework/test_workload.py).
+
+**Techniques.** [differential replay with byte oracle](#technique-differential-replay-and-byte-oracle), [owned process-group cleanup with retained evidence](#technique-owned-processgroup-evidence-lifecycle), [alternating native/interposed measurement](#technique-alternating-native-interposed-measurement).
+
+**Related concepts.** [Chirp](#chirp), [Parrot](#parrot), [owned process](#owned-process).
 
 <a id="technique-differential-replay-and-byte-oracle"></a>
 
@@ -257,6 +364,10 @@ These cards cover the active coursework workflow and the inherited Parrot-to-Chi
 **Tradeoffs.** Replays cover the fixed workload and observed endpoint paths. They do not establish failure behavior for other paths or workloads.
 
 **Code and ownership.** Coursework extension: [`exercise`](coursework/verify.py#L439), [`run_lifecycle`](coursework/verify.py#L306), and [`read_alternates`](coursework/workload.py#L76).
+
+
+
+**Used in.** [Native/interposed replay, measurement, and evidence cleanup](#subsystem-nativeinterposed-replay-measurement-and-evidence-cleanup). [Back to the subsystem map](#architecture-and-execution-guide).
 
 </details>
 
@@ -275,6 +386,10 @@ These cards cover the active coursework workflow and the inherited Parrot-to-Chi
 
 **Code and ownership.** Coursework extension: [`persist_state`](coursework/verify.py#L107), [`stop_process`](coursework/verify.py#L175), and [`finalize_state`](coursework/verify.py#L137).
 
+
+
+**Used in.** [Native/interposed replay, measurement, and evidence cleanup](#subsystem-nativeinterposed-replay-measurement-and-evidence-cleanup). [Back to the subsystem map](#architecture-and-execution-guide).
+
 </details>
 
 <a id="technique-alternating-native-interposed-measurement"></a>
@@ -291,6 +406,10 @@ These cards cover the active coursework workflow and the inherited Parrot-to-Chi
 **Tradeoffs.** Reads follow writes with warm caches, files are closed without `fsync`, and the live Chirp server is outside client/Parrot resource accounting. These measurements do not describe durable storage or general network capacity.
 
 **Code and ownership.** Coursework extension: [`run_metrics`](coursework/verify.py#L333) and [`benchmark`](coursework/workload.py#L122).
+
+
+
+**Used in.** [Native/interposed replay, measurement, and evidence cleanup](#subsystem-nativeinterposed-replay-measurement-and-evidence-cleanup). [Back to the subsystem map](#architecture-and-execution-guide).
 
 </details>
 
